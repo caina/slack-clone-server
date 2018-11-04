@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/gorilla/websocket"
+	r "gopkg.in/rethinkdb/rethinkdb-go.v5"
 )
 
 type FindHandler func(string) (Handler, bool)
@@ -12,9 +13,25 @@ type Message struct {
 }
 
 type Client struct {
-	send        chan Message
-	socket      *websocket.Conn
-	findHandler FindHandler
+	send         chan Message
+	socket       *websocket.Conn
+	findHandler  FindHandler
+	session      *r.Session
+	stopChannels map[int]chan bool
+}
+
+func (c *Client) NewStopChannel(stopKey int) chan bool {
+	c.StopForKey(stopKey)
+	stop := make(chan bool)
+	c.stopChannels[stopKey] = stop
+	return stop
+}
+
+func (c *Client) StopForKey(key int) {
+	if ch, found := c.stopChannels[key]; found {
+		ch <- true
+		delete(c.stopChannels, key)
+	}
 }
 
 func (client *Client) Read() {
@@ -41,10 +58,19 @@ func (client *Client) Write() {
 	client.socket.Close()
 }
 
-func NewClient(socket *websocket.Conn, findHandler FindHandler) *Client {
+func (c *Client) Close() {
+	for _, ch := range c.stopChannels {
+		ch <- true
+	}
+	close(c.send)
+}
+
+func NewClient(socket *websocket.Conn, findHandler FindHandler, session *r.Session) *Client {
 	return &Client{
-		send:        make(chan Message),
-		socket:      socket,
-		findHandler: findHandler,
+		send:         make(chan Message),
+		socket:       socket,
+		findHandler:  findHandler,
+		session:      session,
+		stopChannels: make(map[int]chan bool),
 	}
 }
